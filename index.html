@@ -195,8 +195,6 @@
   }
   .met b { font-weight: 500; color: var(--ink); }
   .met .u { color: var(--ink-3); }
-  .met.best { border-color: var(--accent); background: var(--accent-soft); }
-  .met.best b { color: var(--accent); }
   .prog { position: absolute; left: 0; bottom: 0; height: 2px; background: var(--accent); width: 0; }
 
   .transport {
@@ -271,8 +269,8 @@
   <footer>
     <p>Data: mctg-derived paired set (clean = tar1.wav ch0; noise mixed at SNR ~ U(−5, 10) dB, seed 42), 16 kHz.
       Demo clips: the 10 test files nearest each target SNR with duration ≤ 10 s. Diffusion/flow systems use
-      N = 30 sampler steps. PS systems: prior × anchor at ζ = 1. Best score per metric within a clip is
-      outlined in teal (clean reference excluded).</p>
+      N = 30 sampler steps. PS systems: prior × anchor at ζ = 1. Systems are listed in triplets:
+      discriminative anchor, generative prior, and their posterior-sampling combination.</p>
     <p>Built from <span style="font-family:'IBM Plex Mono',monospace">ps/training_my_data/eval/demo</span> · September 2026.</p>
   </footer>
 </div>
@@ -285,12 +283,21 @@ const AUDIO = {"-5/scenario_29369/noisy": "data:audio/ogg;base64,T2dnUwACAAAAAAA
 
 /* ---------- static config ---------- */
 const GROUPS = [
-  { key: "ref", name: "Reference", color: "var(--c-ref)",     systems: ["noisy", "clean"] },
-  { key: "D",   name: "Discriminative", color: "var(--c-d)",  systems: ["tflocoformer", "cmgan", "ncsnppm"] },
-  { key: "G",   name: "Generative", color: "var(--c-g)",      systems: ["flowloco", "sgmse", "flowmse"] },
-  { key: "H",   name: "Hybrid (D→G)", color: "var(--c-h)",    systems: ["storm"] },
-  { key: "PS",  name: "Posterior sampling", color: "var(--c-ps)", systems: ["ps_sgmse_ncsnppm", "ps_flowmse_cmgan", "ps_flowloco_tfloco"] },
+  { key: "ref", name: "Reference", systems: ["noisy", "clean"] },
+  { key: "t1",  name: "NCSN++M × SGMSE+", systems: ["ncsnppm", "sgmse", "ps_sgmse_ncsnppm"] },
+  { key: "t2",  name: "CMGAN × FlowMSE", systems: ["cmgan", "flowmse", "ps_flowmse_cmgan"] },
+  { key: "t3",  name: "TF-Locoformer × FlowLoco", systems: ["tflocoformer", "flowloco", "ps_flowloco_tfloco"] },
+  { key: "H",   name: "Hybrid (D→G)", systems: ["storm"] },
 ];
+const SYS_TYPE = {
+  noisy: "input", clean: "refsig",
+  tflocoformer: "D", cmgan: "D", ncsnppm: "D",
+  flowloco: "G", sgmse: "G", flowmse: "G",
+  storm: "H",
+  ps_sgmse_ncsnppm: "PS", ps_flowmse_cmgan: "PS", ps_flowloco_tfloco: "PS",
+};
+const FAMILY = { D: "Discriminative", G: "Generative", H: "Hybrid (D→G)", PS: "Posterior sampling", input: "Unprocessed mixture", refsig: "Ground truth" };
+const TYPE_COLOR = { D: "var(--c-d)", G: "var(--c-g)", H: "var(--c-h)", PS: "var(--c-ps)", input: "var(--c-neutral)", refsig: "var(--c-ref)" };
 const SYS_NOTE = {
   noisy: "mixture, model input", clean: "ground truth",
   tflocoformer: "time-frequency dual-path", cmgan: "conformer GAN", ncsnppm: "score-net regression",
@@ -312,9 +319,7 @@ const METRICS = [
   { key: "subdel",  name: "WER sub+del", dir: -1, fmt: v => v.toFixed(1), unit: "%" },
 ];
 const SNRS = [-5, 0, 5];
-const groupOf = {};
-GROUPS.forEach(g => g.systems.forEach(s => { groupOf[s] = g; }));
-const colorOf = s => s === "noisy" ? "var(--c-neutral)" : groupOf[s].color;
+const colorOf = s => TYPE_COLOR[SYS_TYPE[s]];
 
 /* index rows: bySnr[snr][scenario][system] = row */
 const bySnr = {};
@@ -330,8 +335,8 @@ let clip = clipsOf(snr)[0].scenario;
 let activeSys = "noisy";
 
 /* ---------- legend ---------- */
-document.getElementById("legend").innerHTML = GROUPS.slice(1).map(g =>
-  `<span class="lg"><span class="sw" style="background:${g.color}"></span>${g.name}</span>`).join("") +
+document.getElementById("legend").innerHTML = ["D", "G", "H", "PS"].map(t =>
+  `<span class="lg"><span class="sw" style="background:${TYPE_COLOR[t]}"></span>${FAMILY[t]}</span>`).join("") +
   `<span class="lg"><span class="sw" style="background:var(--c-neutral)"></span>Noisy input</span>`;
 
 /* ---------- chart ---------- */
@@ -378,7 +383,7 @@ function renderChart() {
         `<span class="bar${v < 0 ? " neg" : ""}" style="left:${left}%;width:${Math.max(w, .4)}%;background:${colorOf(s)}"></span></span>` +
         `<span class="val">${metric.fmt(v)}</span>`;
       row.addEventListener("mousemove", e => showTip(e,
-        `<b>${SHORT[s]}</b>${s === "noisy" ? "Unprocessed mixture" : groupOf[s].name}<br>` +
+        `<b>${SHORT[s]}</b>${FAMILY[SYS_TYPE[s]]}<br>` +
         `${metric.name}: <span class="tv">${metric.fmt(v)}${metric.unit ? " " + metric.unit : ""}</span>` +
         ` · mean of 10 clips at ${lvl > 0 ? "+" : ""}${lvl} dB`));
       row.addEventListener("mouseleave", hideTip);
@@ -487,34 +492,21 @@ function renderBoard() {
   document.getElementById("clipMeta").innerHTML =
     `<b>${clip}</b> · in-SNR ${c.in_snr.toFixed(1)} dB · ${c.dur.toFixed(1)} s · RT60 ${c.rt60.toFixed(2)} s`;
 
-  /* best-per-metric among non-reference systems */
   const rows = bySnr[snr][clip];
-  const best = {};
-  for (const m of METRICS) {
-    let bv = null;
-    for (const g of GROUPS.slice(1)) for (const s of g.systems) {
-      const v = rows[s][m.key];
-      if (bv === null || (m.dir > 0 ? v > bv : v < bv)) bv = v;
-    }
-    best[m.key] = bv;
-  }
-
   const list = document.getElementById("sysList");
   list.innerHTML = "";
   for (const g of GROUPS) {
     const h = document.createElement("div");
     h.className = "grouphead";
-    h.innerHTML = `<span class="sw" style="background:${g.key === "ref" ? "var(--c-neutral)" : g.color}"></span>${g.name}`;
+    h.innerHTML = g.systems.map(s => `<span class="sw" style="background:${colorOf(s)}"></span>`).join("") + g.name;
     list.appendChild(h);
     for (const s of g.systems) {
       const r = rows[s];
       const el = document.createElement("div");
       el.className = "sys";
       el.dataset.sys = s;
-      const mets = s === "clean" ? "" : METRICS.map(m => {
-        const isBest = g.key !== "ref" && r[m.key] === best[m.key];
-        return `<span class="met${isBest ? " best" : ""}">${fmtMet(r, m)}</span>`;
-      }).join("");
+      const mets = s === "clean" ? "" : METRICS.map(m =>
+        `<span class="met">${fmtMet(r, m)}</span>`).join("");
       el.innerHTML =
         `<button class="p-btn" aria-label="Play ${SHORT[s]}">${PLAY_SVG}</button>` +
         `<span class="sysname">${SHORT[s]}<small>${SYS_NOTE[s]}</small></span>` +
